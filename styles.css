@@ -139,6 +139,20 @@ body {
     var(--bg);
 }
 
+/* Portrait artwork for phones. The landscape image cropped to its dark
+   centre on a tall viewport; this one is composed for the aspect ratio,
+   so the gold sits behind the header and the teal behind the tab bar. */
+@media (max-width: 900px) {
+  .backdrop {
+    background:
+      radial-gradient(120% 42% at 4% -2%,    rgba(255,196,60,.20), transparent 56%),
+      radial-gradient(120% 40% at 100% 102%, rgba(24,178,190,.20), transparent 58%),
+      linear-gradient(180deg, rgba(10,10,11,.46), rgba(10,10,11,.64)),
+      url('assets/bg-mobile.jpg') center center / cover no-repeat,
+      var(--bg);
+  }
+}
+
 /* Everything sits above the backdrop */
 .app { position: relative; z-index: 1; }
 

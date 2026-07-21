@@ -10,7 +10,7 @@
  * else — intake, scoring, records, the ledger — runs entirely on device.
  */
 
-const CACHE = 'sehat-ledger-v18';
+const CACHE = 'sehat-ledger-v19';
 
 const SHELL = [
   './',
@@ -24,7 +24,8 @@ const SHELL = [
   './icon.svg',
   './manifest.webmanifest',
   './assets/abf-logo.png',
-  './assets/bg.jpg'
+  './assets/bg.jpg',
+  './assets/bg-mobile.jpg'
 ];
 
 self.addEventListener('install', e => {
