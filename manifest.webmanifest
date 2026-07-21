@@ -1,0 +1,40 @@
+{
+  "name": "Sehat Ledger — Active Bengaluru Foundation",
+  "short_name": "Sehat Ledger",
+  "description": "Offline-first NCD screening for community health volunteers. Turns every confirmed referral into measurable zakat preserved.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0B0B0C",
+  "theme_color": "#0B0B0C",
+  "categories": ["health", "medical", "productivity"],
+  "lang": "en-IN",
+  "dir": "ltr",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New screening",
+      "short_name": "Screen",
+      "url": "./?view=screen"
+    },
+    {
+      "name": "Zakat ledger",
+      "short_name": "Ledger",
+      "url": "./?view=ledger"
+    }
+  ]
+}

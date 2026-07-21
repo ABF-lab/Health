@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="114" fill="#FFD54A"/>
+  <!-- Heart, echoing the ABF mark -->
+  <path d="M256 404c-8 0-15-3-21-8-24-21-46-40-65-58-27-25-48-47-48-80 0-42 32-74 73-74 24 0 46 11 61 30 15-19 37-30 61-30 41 0 73 32 73 74 0 33-21 55-48 80-19 18-41 37-65 58-6 5-13 8-21 8z" fill="#EF5A2B"/>
+  <!-- Pulse line through the heart: the screening reading -->
+  <path d="M144 250h52l25-44 33 84 27-56 18 16h69" fill="none" stroke="#FFD54A" stroke-width="19" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
