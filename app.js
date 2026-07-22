@@ -10,7 +10,7 @@
 
 import { assess, fastingRisk, OUTCOME_META } from './clinical.js';
 import { computeLedger, ASSUMPTIONS, formatINR, formatCompactINR } from './ledger.js';
-import { readDeviceScreen, generateReferral, followUpTurn, hasKey, BARRIERS, testConnection } from './ai.js';
+import { readDeviceScreen, generateReferral, followUpTurn, hasKey, BARRIERS, testConnection, listOpenRouterModels, configuredProviders } from './ai.js';
 import * as sync from './sync.js';
 
 /* ================================================================== *
@@ -231,8 +231,14 @@ function updateAvatar() {
 function updateAIChip() {
   const chip = $('#aiChip'), txt = $('#aiChipText');
   if (!chip || !txt) return;
-  if (hasKey()) { chip.className = 'ai-chip live'; txt.textContent = 'Gemini live'; }
-  else { chip.className = 'ai-chip mock'; txt.textContent = 'Demo mode'; }
+  const active = configuredProviders();
+  if (active.length) {
+    chip.className = 'ai-chip live';
+    txt.textContent = active.length > 1 ? `${active.length} providers` : active[0];
+  } else {
+    chip.className = 'ai-chip mock';
+    txt.textContent = 'Demo mode';
+  }
 }
 
 /* ================================================================== *
@@ -1214,6 +1220,24 @@ RENDER.settings = () => {
       </div>
 
       <div>
+        <div class="section-title">Fallback provider</div>
+        <div class="stack">
+          <div class="notice">${ICON.info}<div><b>Rate limits are the demo killer.</b> Gemini's free tier caps per minute and per day. Add a second provider and a 429 moves to it automatically instead of dropping to simulated output.</div></div>
+          <div class="field"><label for="orKey">OpenRouter API key</label>
+            <input class="input" id="orKey" type="password" value="${esc(localStorage.getItem('sl.orKey') || '')}" placeholder="sk-or-v1-..." autocomplete="off">
+            <div class="field-hint">Free at openrouter.ai. Several vision-capable models cost nothing.</div></div>
+          <div class="field"><label for="orModel">Model</label>
+            <input class="input" id="orModel" value="${esc(localStorage.getItem('sl.orModel') || 'meta-llama/llama-4-scout:free')}" list="orModelList">
+            <datalist id="orModelList"></datalist></div>
+          <div class="row">
+            <button class="btn btn-secondary grow" id="orSave">Save</button>
+            <button class="btn grow" id="orFind">Find free vision models</button>
+          </div>
+          <div id="orResult"></div>
+        </div>
+      </div>
+
+      <div>
         <div class="section-title">Shared sync</div>
         <div class="stack">
           <div class="row-between">
@@ -1397,6 +1421,41 @@ RENDER.settings = () => {
         toast('SQL copied');
       });
     });
+  });
+
+  $('#orSave').addEventListener('click', () => {
+    localStorage.setItem('sl.orKey', $('#orKey').value.trim());
+    localStorage.setItem('sl.orModel', $('#orModel').value.trim() || 'meta-llama/llama-4-scout:free');
+    updateAIChip();
+    const active = configuredProviders();
+    toast(active.length ? `Providers: ${active.join(' then ')}` : 'No provider configured');
+  });
+
+  $('#orFind').addEventListener('click', async () => {
+    const btn = $('#orFind'), box = $('#orResult');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner dark"></span> Loading';
+    try {
+      const models = await listOpenRouterModels();
+      btn.disabled = false; btn.textContent = 'Find free vision models';
+      if (!models.length) {
+        box.innerHTML = `<div class="notice warn">${ICON.info}<div>No free vision models returned right now. Availability changes; try again or pick one on openrouter.ai.</div></div>`;
+        return;
+      }
+      $('#orModelList').innerHTML = models.map(m => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join('');
+      box.innerHTML = `
+        <div class="notice ok">${ICON.check}<div><b>${models.length} free vision models available.</b> Tap one to use it.</div></div>
+        <div class="row wrap" style="margin-top:10px">
+          ${models.slice(0, 8).map(m => `<button class="quick-reply" data-m="${esc(m.id)}">${esc(m.id)}</button>`).join('')}
+        </div>`;
+      box.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', () => {
+        $('#orModel').value = b.dataset.m;
+        localStorage.setItem('sl.orModel', b.dataset.m);
+        toast('Model set');
+      }));
+    } catch (err) {
+      btn.disabled = false; btn.textContent = 'Find free vision models';
+      box.innerHTML = `<div class="notice high">${ICON.info}<div><b>Could not load models.</b> ${esc(err.message)}</div></div>`;
+    }
   });
 
   $('#seedBtn').addEventListener('click', () => { seed(); toast('Sample data loaded'); RENDER.settings(); });

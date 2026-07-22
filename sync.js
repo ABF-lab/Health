@@ -97,6 +97,10 @@ export function makeSetupLink(base = location.href.split('#')[0], opts = {}) {
     const g = localStorage.getItem('sl.apiKey') || '';
     const m = localStorage.getItem('sl.model') || '';
     if (g) { body.g = g; if (m) body.m = m; }
+
+    const o = localStorage.getItem('sl.orKey') || '';
+    const om = localStorage.getItem('sl.orModel') || '';
+    if (o) { body.o = o; if (om) body.om = om; }
   }
 
   if (!Object.keys(body).length) return '';
@@ -111,7 +115,7 @@ export function setupLinkContents() {
   const { url, key } = cfg();
   return {
     sync: !!(url && key),
-    ai: !!localStorage.getItem('sl.apiKey')
+    ai: !!(localStorage.getItem('sl.apiKey') || localStorage.getItem('sl.orKey'))
   };
 }
 
@@ -121,8 +125,8 @@ export function applySetupLink() {
   if (!m) return false;
   try {
     const json = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
-    const { u, k, g, m: model } = JSON.parse(json);
-    if (!u && !g) return false;
+    const { u, k, g, m: model, o, om } = JSON.parse(json);
+    if (!u && !g && !o) return false;
 
     if (u && k) setConfig(u, k);
 
@@ -131,6 +135,10 @@ export function applySetupLink() {
     if (g) {
       localStorage.setItem('sl.apiKey', g);
       if (model) localStorage.setItem('sl.model', model);
+    }
+    if (o) {
+      localStorage.setItem('sl.orKey', o);
+      if (om) localStorage.setItem('sl.orModel', om);
     }
     // Strip the fragment so the key does not linger in the address bar,
     // in history, or in a screenshot taken during a demo.

@@ -19,21 +19,202 @@
  * Studio, and rotated after the event.
  */
 
-const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models';
+const OPENROUTER = 'https://openrouter.ai/api/v1';
 
 export const AI_STATUS = { LIVE: 'live', MOCK: 'mock', ERROR: 'error' };
 
 let lastStatus = AI_STATUS.MOCK;
+let lastProvider = '';
 export function getLastStatus() { return lastStatus; }
+export function getLastProvider() { return lastProvider; }
 
-function cfg() {
+/* ------------------------------------------------------------------ *
+ * Providers
+ *
+ * Gemini free tier caps both per-minute and per-day. Hitting either mid-demo
+ * would otherwise drop the app to labelled mock output at the worst possible
+ * moment, so a second provider is tried before giving up.
+ *
+ * OpenRouter is the fallback because it is OpenAI-compatible, carries free
+ * vision-capable models, and one key reaches many models — which also means
+ * the model list is discovered at runtime rather than hardcoded and going
+ * stale.
+ * ------------------------------------------------------------------ */
+
+export function cfg() {
   return {
-    key: localStorage.getItem('sl.apiKey') || '',
-    model: localStorage.getItem('sl.model') || 'gemini-flash-latest'
+    order: (localStorage.getItem('sl.order') || 'gemini,openrouter').split(','),
+    gemini: {
+      key: localStorage.getItem('sl.apiKey') || '',
+      model: localStorage.getItem('sl.model') || 'gemini-flash-latest'
+    },
+    openrouter: {
+      key: localStorage.getItem('sl.orKey') || '',
+      model: localStorage.getItem('sl.orModel') || 'meta-llama/llama-4-scout:free'
+    }
   };
 }
 
-export function hasKey() { return !!cfg().key; }
+export function hasKey() {
+  const c = cfg();
+  return !!(c.gemini.key || c.openrouter.key);
+}
+
+export function configuredProviders() {
+  const c = cfg();
+  return c.order.filter(p => c[p] && c[p].key);
+}
+
+/* A rate limit or quota exhaustion should move to the next provider.
+   A bad request should not — that would just fail twice. */
+function isRetryable(err) {
+  const m = String(err && err.message || '');
+  return /\b(429|503|500)\b/.test(m) || /quota|rate.?limit|exhausted|overloaded|capacity/i.test(m);
+}
+
+/* ---------------- Gemini ---------------- */
+
+async function callGeminiProvider({ parts, schema, system, temperature }) {
+  const { key, model } = cfg().gemini;
+  if (!key) throw new Error('NO_KEY');
+
+  const body = {
+    contents: [{ role: 'user', parts }],
+    generationConfig: { temperature, responseMimeType: 'application/json' }
+  };
+  if (schema) body.generationConfig.responseSchema = schema;
+  if (system) body.systemInstruction = { parts: [{ text: system }] };
+
+  const res = await fetch(`${GEMINI}/${model}:generateContent?key=${encodeURIComponent(key)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Gemini ${res.status}: ${detail.slice(0, 240)}`);
+  }
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
+  if (!text) throw new Error('Gemini returned an empty response');
+  return text;
+}
+
+/* ---------------- OpenRouter (OpenAI-compatible) ---------------- */
+
+/* Gemini part shape -> OpenAI content blocks */
+function toOpenAIContent(parts) {
+  return parts.map(p => {
+    if (p.text) return { type: 'text', text: p.text };
+    if (p.inline_data) {
+      return {
+        type: 'image_url',
+        image_url: { url: `data:${p.inline_data.mime_type};base64,${p.inline_data.data}` }
+      };
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+async function callOpenRouterProvider({ parts, schema, system, temperature }) {
+  const { key, model } = cfg().openrouter;
+  if (!key) throw new Error('NO_KEY');
+
+  // json_schema support varies by model on OpenRouter; json_object plus an
+  // explicit shape in the system prompt works everywhere.
+  const shape = schema
+    ? `\n\nReturn a single JSON object with exactly this shape, no prose:\n${JSON.stringify(schema)}`
+    : '\n\nReturn a single JSON object, no prose.';
+
+  const messages = [];
+  if (system) messages.push({ role: 'system', content: system + shape });
+  else messages.push({ role: 'system', content: shape });
+  messages.push({ role: 'user', content: toOpenAIContent(parts) });
+
+  const res = await fetch(`${OPENROUTER}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${key}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': location.origin,
+      'X-Title': 'Sehat Ledger'
+    },
+    body: JSON.stringify({
+      model,
+      temperature,
+      response_format: { type: 'json_object' },
+      messages
+    })
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`OpenRouter ${res.status}: ${detail.slice(0, 240)}`);
+  }
+  const data = await res.json();
+  const text = data?.choices?.[0]?.message?.content || '';
+  if (!text) throw new Error('OpenRouter returned an empty response');
+  return text;
+}
+
+const PROVIDERS = { gemini: callGeminiProvider, openrouter: callOpenRouterProvider };
+
+function parseJSON(text) {
+  try { return JSON.parse(text); }
+  catch {
+    const m = text.match(/\{[\s\S]*\}/);
+    if (m) return JSON.parse(m[0]);
+    throw new Error('Model did not return valid JSON');
+  }
+}
+
+/* Try each configured provider in order, moving on only for rate limits
+   and transient server errors. */
+async function callModel({ parts, schema, system, temperature = 0.2 }) {
+  const order = configuredProviders();
+  if (!order.length) throw new Error('NO_KEY');
+
+  let lastErr;
+  for (const name of order) {
+    try {
+      const text = await PROVIDERS[name]({ parts, schema, system, temperature });
+      lastProvider = name;
+      return parseJSON(text);
+    } catch (err) {
+      lastErr = err;
+      if (err.message === 'NO_KEY') continue;
+      if (!isRetryable(err)) throw err;
+      // rate limited: fall through to the next provider
+    }
+  }
+  throw lastErr || new Error('NO_KEY');
+}
+
+/* ------------------------------------------------------------------ *
+ * OpenRouter model discovery
+ *
+ * Model names churn. Ask the API which free models can accept an image
+ * rather than baking in a list that expires.
+ * ------------------------------------------------------------------ */
+
+export async function listOpenRouterModels() {
+  const { key } = cfg().openrouter;
+  const res = await fetch(`${OPENROUTER}/models`, {
+    headers: key ? { Authorization: `Bearer ${key}` } : {}
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const { data } = await res.json();
+
+  return (data || [])
+    .filter(m => {
+      const p = m.pricing || {};
+      const free = Number(p.prompt || 0) === 0 && Number(p.completion || 0) === 0;
+      const mods = m.architecture?.input_modalities || [];
+      return free && mods.includes('image');
+    })
+    .map(m => ({ id: m.id, label: m.name || m.id, ctx: m.context_length }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
 
 /* ------------------------------------------------------------------ *
  * Connection test
@@ -44,10 +225,10 @@ export function hasKey() { return !!cfg().key; }
  * ------------------------------------------------------------------ */
 
 export async function listModels() {
-  const { key } = cfg();
+  const { key } = cfg().gemini;
   if (!key) throw new Error('NO_KEY');
 
-  const res = await fetch(`${ENDPOINT}?key=${encodeURIComponent(key)}&pageSize=100`);
+  const res = await fetch(`${GEMINI}?key=${encodeURIComponent(key)}&pageSize=100`);
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     throw new Error(`${res.status}: ${detail.slice(0, 200)}`);
@@ -70,7 +251,7 @@ export async function listModels() {
 }
 
 export async function testConnection() {
-  const { model } = cfg();
+  const { model } = cfg().gemini;
   const started = performance.now();
 
   let models;
@@ -84,7 +265,7 @@ export async function testConnection() {
   const available = models.some(m => m.id === model);
 
   try {
-    const out = await callGemini({
+    const out = await callModel({
       temperature: 0,
       parts: [{ text: 'Reply with exactly {"ok":true} and nothing else.' }],
       schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] }
@@ -103,41 +284,6 @@ export async function testConnection() {
       ok: false, stage: 'generate', model, available, models,
       message: err.message
     };
-  }
-}
-
-async function callGemini({ parts, schema, system, temperature = 0.2 }) {
-  const { key, model } = cfg();
-  if (!key) throw new Error('NO_KEY');
-
-  const body = {
-    contents: [{ role: 'user', parts }],
-    generationConfig: { temperature, responseMimeType: 'application/json' }
-  };
-  if (schema) body.generationConfig.responseSchema = schema;
-  if (system) body.systemInstruction = { parts: [{ text: system }] };
-
-  const res = await fetch(`${ENDPOINT}/${model}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Gemini ${res.status}: ${detail.slice(0, 300)}`);
-  }
-
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '';
-  if (!text) throw new Error('Empty response from model');
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    const m = text.match(/\{[\s\S]*\}/);
-    if (m) return JSON.parse(m[0]);
-    throw new Error('Model did not return valid JSON');
   }
 }
 
@@ -174,7 +320,7 @@ Rules:
 
 export async function readDeviceScreen(base64, mimeType = 'image/jpeg') {
   try {
-    const out = await callGemini({
+    const out = await callModel({
       system: VISION_SYSTEM,
       schema: READING_SCHEMA,
       temperature: 0,
@@ -254,7 +400,7 @@ export async function generateReferral({ record, assessment, language, facility,
   ].filter(Boolean).join(' ');
 
   try {
-    const out = await callGemini({
+    const out = await callModel({
       system: REFERRAL_SYSTEM,
       schema: REFERRAL_SCHEMA,
       temperature: 0.4,
@@ -353,7 +499,7 @@ export async function followUpTurn({ record, assessment, thread, language, facil
   const transcript = thread.map(m => `${m.from === 'agent' ? 'Assistant' : 'Patient'}: ${m.text}`).join('\n');
 
   try {
-    const out = await callGemini({
+    const out = await callModel({
       system: AGENT_SYSTEM,
       schema: AGENT_SCHEMA,
       temperature: 0.5,
