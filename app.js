@@ -62,10 +62,26 @@ function kickSync() {
   kickTimer = setTimeout(() => sync.syncNow(syncIO), 800);
 }
 
-// A pull that changed anything should refresh whatever the user is looking at
+/* A completed pull may have brought in new records, so the list views want
+ * refreshing. But a re-render replaces the DOM wholesale, which is
+ * destructive if the user is in the middle of something. Guard hard:
+ *
+ *   - the screening flow is a stateful form and a generated referral lives
+ *     only in the DOM, so it is never auto-refreshed
+ *   - a focused input loses its caret and its value-in-progress
+ *   - an open sheet would be torn down mid-read
+ */
+function safeToRerender() {
+  if (currentView === 'screen') return false;
+  const a = document.activeElement;
+  if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return false;
+  if ($('#sheetRoot')?.children.length) return false;
+  return true;
+}
+
 sync.onSyncChange(st => {
   renderSyncPill(st);
-  if (st.state === 'idle') RENDER[currentView]?.();
+  if (st.state === 'idle' && safeToRerender()) RENDER[currentView]?.();
 });
 
 function renderSyncPill(st) {
@@ -242,8 +258,10 @@ $$('.nav-item').forEach(b => b.addEventListener('click', () => go(b.dataset.view
 
 let draft = null;
 let step = 0;
+let renderedStep = -1;
 
 function newDraft() {
+  renderedStep = -1;
   const s = store.settings();
   return {
     id: uid(),
@@ -276,7 +294,10 @@ RENDER.screen = () => {
     <div class="actions" id="stepActions"></div>`;
 
   ({ 0: stepIdentity, 1: stepRisk, 2: stepVitals, 3: stepResult })[step]();
-  scrollTop();
+
+  // Only on an actual step change. Re-rendering the same step must not
+  // yank the viewport, or generating a referral scrolls the slip away.
+  if (renderedStep !== step) { scrollTop(); renderedStep = step; }
 };
 
 function stepper() {
@@ -702,6 +723,9 @@ async function finishScreening(a) {
 
   store.upsert(draft);
   renderSlip(ref, facility);
+  $('#referralArea')?.scrollIntoView({
+    behavior: reduceMotion() ? 'auto' : 'smooth', block: 'start'
+  });
   btn.disabled = false;
   btn.textContent = 'Done';
   btn.onclick = () => { draft = null; step = 0; go('records'); };
