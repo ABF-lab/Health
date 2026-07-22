@@ -142,6 +142,29 @@ const ICON = {
   ruler:  svg('<path d="M21.3 8.7 8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4z"/><path d="m7.5 10.5 2 2M10.5 7.5l2 2M13.5 4.5l2 2"/>', 1.6)
 };
 
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* Advancing a step must return the user to the top. The Continue button sits
+   at the foot of a long form, so without this every step begins scrolled
+   past its own first field. */
+function scrollTop() {
+  window.scrollTo({ top: 0, behavior: reduceMotion() ? 'auto' : 'smooth' });
+}
+
+/* Validation failure should take the volunteer to the field, not just tell
+   them something is wrong while they are looking at the wrong part of the
+   form. Blur first so a soft keyboard does not fight the scroll. */
+function focusField(sel, msg) {
+  toast(msg);
+  const el = $(sel);
+  if (!el) return;
+  document.activeElement?.blur?.();
+  requestAnimationFrame(() => {
+    el.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'center' });
+    setTimeout(() => el.focus({ preventScroll: true }), reduceMotion() ? 0 : 320);
+  });
+}
+
 function toast(msg, ms = 2600) {
   const el = document.createElement('div');
   el.className = 'toast';
@@ -207,7 +230,7 @@ function go(view) {
   currentView = view;
   $$('.nav-item').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === view)));
   $$('.view').forEach(v => v.classList.toggle('active', v.id === `view-${view}`));
-  window.scrollTo({ top: 0 });
+  window.scrollTo({ top: 0 });   // instant on tab switch; smooth would lag the transition
   RENDER[view]?.();
 }
 
@@ -253,6 +276,7 @@ RENDER.screen = () => {
     <div class="actions" id="stepActions"></div>`;
 
   ({ 0: stepIdentity, 1: stepRisk, 2: stepVitals, 3: stepResult })[step]();
+  scrollTop();
 };
 
 function stepper() {
@@ -336,9 +360,9 @@ function stepIdentity() {
   bindInputs({ '#fName': 'name', '#fAge': 'age', '#fPhone': 'phone', '#fCentre': 'centre', '#fLang': 'language' });
 
   $('#next0').addEventListener('click', () => {
-    if (!draft.consent) return toast('Consent is required before screening');
-    if (!draft.name.trim()) return toast('Name is required');
-    if (!draft.age) return toast('Age is required');
+    if (!draft.consent) return focusField('#tgConsent', 'Consent is required before screening');
+    if (!draft.name.trim()) return focusField('#fName', 'Name is required');
+    if (!draft.age) return focusField('#fAge', 'Age is required');
     step = 1; RENDER.screen();
   });
 }
@@ -461,7 +485,7 @@ function stepVitals() {
 
   $('#back2').addEventListener('click', () => { step = 1; RENDER.screen(); });
   $('#next2').addEventListener('click', () => {
-    if (!draft.systolic && !draft.glucose) return toast('Enter at least one vital reading');
+    if (!draft.systolic && !draft.glucose) return focusField('#fSys', 'Enter at least one vital reading');
     step = 3; RENDER.screen();
   });
 }
