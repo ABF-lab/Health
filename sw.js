@@ -10,7 +10,7 @@
  * else — intake, scoring, records, the ledger — runs entirely on device.
  */
 
-const CACHE = 'sehat-ledger-v19';
+const CACHE = 'sehat-ledger-v20';
 
 const SHELL = [
   './',
@@ -21,6 +21,7 @@ const SHELL = [
   './clinical.js',
   './ledger.js',
   './ai.js',
+  './sync.js',
   './icon.svg',
   './manifest.webmanifest',
   './assets/abf-logo.png',
@@ -53,6 +54,7 @@ self.addEventListener('fetch', e => {
 
   // Never cache model calls. A stale vital sign is worse than no vital sign.
   if (url.hostname.includes('generativelanguage.googleapis.com')) return;
+  if (url.hostname.endsWith('.supabase.co')) return;
   if (e.request.method !== 'GET') return;
 
   e.respondWith(

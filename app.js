@@ -11,6 +11,7 @@
 import { assess, fastingRisk, OUTCOME_META } from './clinical.js';
 import { computeLedger, ASSUMPTIONS, formatINR, formatCompactINR } from './ledger.js';
 import { readDeviceScreen, generateReferral, followUpTurn, hasKey, BARRIERS, testConnection } from './ai.js';
+import * as sync from './sync.js';
 
 /* ================================================================== *
  * Storage
@@ -26,10 +27,15 @@ const store = {
   },
   save(records) { localStorage.setItem(KEY, JSON.stringify(records)); },
   upsert(rec) {
+    // Stamp and mark dirty so the sync loop knows this needs pushing.
+    // Local write always succeeds first; the network is never in the path.
+    rec.updatedAt = new Date().toISOString();
+    rec._dirty = true;
     const all = store.records();
     const i = all.findIndex(r => r.id === rec.id);
     if (i >= 0) all[i] = rec; else all.unshift(rec);
     store.save(all);
+    kickSync();
     return rec;
   },
   get(id) { return store.records().find(r => r.id === id); },
@@ -39,6 +45,43 @@ const store = {
   },
   saveSettings(s) { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }
 };
+
+/* ================================================================== *
+ * Sync
+ * ================================================================== */
+
+const syncIO = {
+  read: () => store.records(),
+  save: recs => store.save(recs)
+};
+
+let kickTimer = null;
+function kickSync() {
+  if (!sync.isConfigured()) return;
+  clearTimeout(kickTimer);
+  kickTimer = setTimeout(() => sync.syncNow(syncIO), 800);
+}
+
+// A pull that changed anything should refresh whatever the user is looking at
+sync.onSyncChange(st => {
+  renderSyncPill(st);
+  if (st.state === 'idle') RENDER[currentView]?.();
+});
+
+function renderSyncPill(st) {
+  const el = $('#syncPill');
+  if (!el) return;
+  const map = {
+    off:     ['mock', 'Local only'],
+    idle:    ['live', 'Synced'],
+    syncing: ['live', 'Syncing'],
+    error:   ['mock', 'Sync error']
+  };
+  const [cls, label] = map[st.state] || map.off;
+  el.className = `ai-chip ${cls}`;
+  el.innerHTML = `<span class="dot"></span>${esc(label)}`;
+  el.title = st.lastError || (st.lastSyncAt ? 'Last sync ' + st.lastSyncAt.toLocaleTimeString() : '');
+}
 
 const DEFAULT_SETTINGS = {
   centre: 'Masjid-e-Noor, Shivajinagar',
@@ -242,7 +285,7 @@ function stepIdentity() {
   $('#stepBody').innerHTML = `
     <div class="cards">
       ${sectionCard('Consent', 'Read aloud in the person’s language before any reading is taken.', `
-        <div class="quote" style="margin-bottom:4px">${ICON.shield}<div>"We would like to check your blood pressure, blood sugar, height and weight. There is no charge. The results stay with you. You can stop at any time and you do not have to answer anything you do not want to."</div></div>
+        <div class="quote" style="margin-bottom:4px">${ICON.shield}<div>"We would like to check your blood pressure, blood sugar, height and weight. There is no charge. Your results are shared only with the health programme and the doctor we refer you to. You can stop at any time and you do not have to answer anything you do not want to."</div></div>
         <div class="toggle-row">
           <div class="toggle-row-label">Consent given for screening</div>
           <button class="switch" id="tgConsent" role="switch" aria-checked="${draft.consent}" aria-label="Consent given for screening"></button>
@@ -1123,9 +1166,30 @@ RENDER.settings = () => {
       </div>
 
       <div>
+        <div class="section-title">Shared sync</div>
+        <div class="stack">
+          <div class="row-between">
+            <span class="small muted">Status</span>
+            <span id="syncPill" class="ai-chip mock"><span class="dot"></span>Local only</span>
+          </div>
+          <div class="notice warn">${ICON.info}<div><b>Demo configuration.</b> Anyone with the app link can read every synced record. Use seeded data only. Do not enter real patient details while sync is open.</div></div>
+          <div class="field"><label for="sbUrl">Supabase project URL</label>
+            <input class="input" id="sbUrl" value="${esc(localStorage.getItem('sl.sbUrl') || '')}" placeholder="https://xxxx.supabase.co" autocomplete="off"></div>
+          <div class="field"><label for="sbKey">Anon public key</label>
+            <input class="input" id="sbKey" type="password" value="${esc(localStorage.getItem('sl.sbKey') || '')}" placeholder="eyJhbGci..." autocomplete="off"></div>
+          <div class="row">
+            <button class="btn btn-secondary grow" id="sbSave">Save</button>
+            <button class="btn grow" id="sbTest">Test</button>
+          </div>
+          <div id="sbResult"></div>
+          <button class="btn-ghost" id="sbSql">Show setup SQL</button>
+        </div>
+      </div>
+
+      <div>
         <div class="section-title">Data</div>
         <div class="stack">
-          <div class="notice">${ICON.shield}<div><b>${store.records().length} records</b> on this device. Nothing has been uploaded anywhere.</div></div>
+          <div class="notice">${ICON.shield}<div><b>${store.records().length} records</b> on this device.</div></div>
           <button class="btn btn-secondary" id="seedBtn">Load sample data</button>
           <button class="btn btn-secondary" id="exportBtn">Export as JSON</button>
           <button class="btn btn-danger" id="wipeBtn">Erase all records</button>
@@ -1214,6 +1278,38 @@ RENDER.settings = () => {
     }
   });
 
+  renderSyncPill(sync.status());
+
+  $('#sbSave').addEventListener('click', () => {
+    sync.setConfig($('#sbUrl').value, $('#sbKey').value);
+    if (sync.isConfigured()) { sync.startSync(syncIO); toast('Sync enabled'); }
+    else { sync.stopSync(); toast('Sync disabled, local only'); }
+  });
+
+  $('#sbTest').addEventListener('click', async () => {
+    sync.setConfig($('#sbUrl').value, $('#sbKey').value);
+    const btn = $('#sbTest'), box = $('#sbResult');
+    btn.disabled = true; btn.innerHTML = '<span class="spinner dark"></span> Testing';
+    const r = await sync.testConnection();
+    btn.disabled = false; btn.textContent = 'Test';
+    box.innerHTML = r.ok
+      ? `<div class="notice ok">${ICON.check}<div><b>Connected.</b> ${esc(r.message)}</div></div>`
+      : `<div class="notice high">${ICON.info}<div><b>Not connected.</b> ${esc(r.message)}</div></div>`;
+    if (r.ok) { sync.startSync(syncIO); toast('Sync enabled'); }
+  });
+
+  $('#sbSql').addEventListener('click', () => {
+    sheet('Supabase setup', `
+      <p class="small muted" style="margin-bottom:14px">Create a project at supabase.com, open the SQL editor, and run this once. Then paste the project URL and anon key above.</p>
+      <div class="formula" style="white-space:pre-wrap">${esc(sync.SETUP_SQL)}</div>
+      <button class="btn btn-block" id="copySql" style="margin-top:14px">Copy SQL</button>`, root => {
+      root.querySelector('#copySql').addEventListener('click', () => {
+        navigator.clipboard?.writeText(sync.SETUP_SQL);
+        toast('SQL copied');
+      });
+    });
+  });
+
   $('#seedBtn').addEventListener('click', () => { seed(); toast('Sample data loaded'); RENDER.settings(); });
   $('#exportBtn').addEventListener('click', exportJSON);
   $('#wipeBtn').addEventListener('click', () => {
@@ -1296,8 +1392,11 @@ function seed() {
     out.push(rec);
   }
 
+  const now = new Date().toISOString();
+  out.forEach(r => { r.updatedAt = now; r._dirty = true; });
   out.sort((x, y) => new Date(y.createdAt) - new Date(x.createdAt));
   store.save(out);
+  kickSync();
 }
 
 /* ================================================================== *
@@ -1306,6 +1405,7 @@ function seed() {
 
 updateAIChip();
 updateAvatar();
+if (sync.isConfigured()) sync.startSync(syncIO);
 $('#profileBtn').addEventListener('click', () => go('settings'));
 $('#mAvatar')?.addEventListener('click', () => go('settings'));
 RENDER.screen();
