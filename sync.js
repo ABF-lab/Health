@@ -72,18 +72,47 @@ export function setConfig(url, key) {
  * The fragment is used rather than a query string deliberately: fragments
  * are never sent to the server and never appear in server logs.
  *
- * The anon key is not a secret in the usual sense; it ships inside the
- * client on a public page regardless. What actually guards the data is the
- * row-level policy, which is open for this demo. Treat the link as
- * team-internal all the same.
+ * The link carries two different kinds of credential, and they are not
+ * equivalent:
+ *
+ *   Supabase anon key — public by design. It ships inside the client on a
+ *   public page regardless. What actually guards the data is the row-level
+ *   policy, which is open for this demo.
+ *
+ *   Gemini API key — a real secret. It bills a real account. It is included
+ *   so a teammate gets vision, referral generation and the follow-up agent
+ *   without pasting anything, but the link must stay in the team chat, and
+ *   the key should be referrer-restricted in AI Studio and rotated after
+ *   the event. makeSetupLink({ includeAI: false }) omits it.
  * ------------------------------------------------------------------ */
 
-export function makeSetupLink(base = location.href.split('#')[0]) {
+export function makeSetupLink(base = location.href.split('#')[0], opts = {}) {
+  const { includeAI = true } = opts;
   const { url, key } = cfg();
-  if (!url || !key) return '';
-  const payload = btoa(JSON.stringify({ u: url, k: key }))
+
+  const body = {};
+  if (url && key) { body.u = url; body.k = key; }
+
+  if (includeAI) {
+    const g = localStorage.getItem('sl.apiKey') || '';
+    const m = localStorage.getItem('sl.model') || '';
+    if (g) { body.g = g; if (m) body.m = m; }
+  }
+
+  if (!Object.keys(body).length) return '';
+
+  const payload = btoa(JSON.stringify(body))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   return `${base}#s=${payload}`;
+}
+
+/* What a link would actually carry, for honest labelling in the UI. */
+export function setupLinkContents() {
+  const { url, key } = cfg();
+  return {
+    sync: !!(url && key),
+    ai: !!localStorage.getItem('sl.apiKey')
+  };
 }
 
 /* Consume a setup link on boot. Returns true if config was applied. */
@@ -92,9 +121,17 @@ export function applySetupLink() {
   if (!m) return false;
   try {
     const json = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
-    const { u, k } = JSON.parse(json);
-    if (!u || !k) return false;
-    setConfig(u, k);
+    const { u, k, g, m: model } = JSON.parse(json);
+    if (!u && !g) return false;
+
+    if (u && k) setConfig(u, k);
+
+    // The Gemini key rides along so a teammate gets vision, referral
+    // generation and the follow-up agent without pasting anything.
+    if (g) {
+      localStorage.setItem('sl.apiKey', g);
+      if (model) localStorage.setItem('sl.model', model);
+    }
     // Strip the fragment so the key does not linger in the address bar,
     // in history, or in a screenshot taken during a demo.
     history.replaceState(null, '', location.pathname + location.search);

@@ -1302,16 +1302,39 @@ RENDER.settings = () => {
   });
 
   $('#sbShare').addEventListener('click', async () => {
-    const link = sync.makeSetupLink('https://abf-lab.github.io/Health/');
-    if (!link) return toast('Configure and test the connection first');
-    try { await navigator.clipboard.writeText(link); } catch {}
+    const BASE = 'https://abf-lab.github.io/Health/';
+    const has = sync.setupLinkContents();
+    const full = sync.makeSetupLink(BASE);
+    const syncOnly = sync.makeSetupLink(BASE, { includeAI: false });
+
+    if (!full) return toast('Configure sync or the Gemini key first');
+    try { await navigator.clipboard.writeText(full); } catch {}
+
+    const carries = [
+      has.sync ? 'Shared database' : null,
+      has.ai ? 'Gemini key and model' : null
+    ].filter(Boolean).join(' &middot; ');
+
     sheet('Device setup link', `
-      <p class="small muted" style="margin-bottom:14px">Open this on any other phone or laptop and it configures itself in one tap. No typing. Copied to your clipboard already.</p>
-      <div class="formula" style="white-space:pre-wrap;word-break:break-all">${esc(link)}</div>
-      <div class="notice warn" style="margin-top:14px">${ICON.info}<div><b>Team internal.</b> The link carries the database key. Send it in your team chat, not anywhere public.</div></div>
-      <button class="btn btn-block" id="copyLink" style="margin-top:14px">Copy again</button>`, root => {
+      <p class="small muted" style="margin-bottom:12px">Open this on any other phone or laptop and it configures itself in one tap. Copied to your clipboard already.</p>
+      <div class="row wrap" style="margin-bottom:12px">
+        <span class="badge ${has.sync ? 't-ok' : 't-neutral'}"><span class="dot"></span>Sync ${has.sync ? 'included' : 'not set'}</span>
+        <span class="badge ${has.ai ? 't-ok' : 't-neutral'}"><span class="dot"></span>AI key ${has.ai ? 'included' : 'not set'}</span>
+      </div>
+      <div class="formula" style="white-space:pre-wrap;word-break:break-all">${esc(full)}</div>
+      <div class="notice warn" style="margin-top:14px">${ICON.info}<div>
+        <b>Team internal.</b> Carries: ${carries}.<br>
+        The Gemini key bills a real account. Keep this in your team chat, restrict the key by referrer in AI Studio, and rotate it after the event.
+      </div></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn grow" id="copyLink">Copy full link</button>
+        ${has.ai && syncOnly ? `<button class="btn btn-secondary grow" id="copySyncOnly">Without AI key</button>` : ''}
+      </div>`, root => {
       root.querySelector('#copyLink').addEventListener('click', () => {
-        navigator.clipboard?.writeText(link); toast('Link copied');
+        navigator.clipboard?.writeText(full); toast('Full link copied');
+      });
+      root.querySelector('#copySyncOnly')?.addEventListener('click', () => {
+        navigator.clipboard?.writeText(syncOnly); toast('Sync-only link copied');
       });
     });
   });
@@ -1423,7 +1446,9 @@ function seed() {
 
 // A setup link must be consumed before anything reads the config
 if (sync.applySetupLink()) {
-  toast('Sync configured for this device');
+  const got = sync.setupLinkContents();
+  const parts = [got.sync ? 'sync' : null, got.ai ? 'AI' : null].filter(Boolean).join(' and ');
+  toast(`Device configured${parts ? ': ' + parts : ''}`);
 }
 
 updateAIChip();
