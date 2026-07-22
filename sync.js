@@ -61,6 +61,49 @@ export function setConfig(url, key) {
   emit();
 }
 
+/* ------------------------------------------------------------------ *
+ * Setup link
+ *
+ * Config lives per device in localStorage, which means every phone would
+ * otherwise need the URL and key typed in by hand. Instead one device
+ * generates a link carrying the config in the fragment; opening it on any
+ * other device configures it in a single tap.
+ *
+ * The fragment is used rather than a query string deliberately: fragments
+ * are never sent to the server and never appear in server logs.
+ *
+ * The anon key is not a secret in the usual sense; it ships inside the
+ * client on a public page regardless. What actually guards the data is the
+ * row-level policy, which is open for this demo. Treat the link as
+ * team-internal all the same.
+ * ------------------------------------------------------------------ */
+
+export function makeSetupLink(base = location.href.split('#')[0]) {
+  const { url, key } = cfg();
+  if (!url || !key) return '';
+  const payload = btoa(JSON.stringify({ u: url, k: key }))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${base}#s=${payload}`;
+}
+
+/* Consume a setup link on boot. Returns true if config was applied. */
+export function applySetupLink() {
+  const m = (location.hash || '').match(/[#&]s=([A-Za-z0-9\-_]+)/);
+  if (!m) return false;
+  try {
+    const json = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
+    const { u, k } = JSON.parse(json);
+    if (!u || !k) return false;
+    setConfig(u, k);
+    // Strip the fragment so the key does not linger in the address bar,
+    // in history, or in a screenshot taken during a demo.
+    history.replaceState(null, '', location.pathname + location.search);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function headers(extra = {}) {
   const { key } = cfg();
   return {

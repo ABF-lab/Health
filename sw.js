@@ -10,7 +10,7 @@
  * else — intake, scoring, records, the ledger — runs entirely on device.
  */
 
-const CACHE = 'sehat-ledger-v20';
+const CACHE = 'sehat-ledger-v21';
 
 const SHELL = [
   './',
